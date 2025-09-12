@@ -25,6 +25,11 @@ include_directories(../../../module_sample)
 include_directories(../../../../sample_c/module_sample)
 include_directories(../common)
 include_directories(../manifold2/application)
+# add
+include_directories(../manifold2/application/common)
+include_directories(../manifold2/application/module)
+include_directories(../manifold2/application/session)
+include_directories(../manifold2/application/nlohmann)
 
 file(GLOB_RECURSE MODULE_SAMPLE_SRC
         ../../../module_sample/liveview/*.c*
