@@ -9,6 +9,7 @@ inline uint8_t g_host_drone_id = 0; // 主机无人机id
 inline float g_host_latitude_deg = 0.0f;   ///< 主机GPS纬度 [deg]
 inline float g_host_longitude_deg = 0.0f;  ///< 主机GPS经度 [deg]
 inline float g_host_altitude_fused = 0.0f; ///< 主机GPS高度 [m]
+inline float g_host_height_fusion = 0.0f;  ///< 主机离地高度 [m]
 
 // 主机确认标识
 inline bool g_host_confirmed = false; // 主机确认标识，默认未确认
@@ -50,9 +51,9 @@ inline uint8_t getHostDroneId() {
     return g_host_drone_id;
 }
 inline bool isOffsetReliable() {
-    return (std::abs(g_offset_x) < 5.0f &&
-            std::abs(g_offset_y) < 5.0f &&
-            std::abs(g_offset_z) < 5.0f);
+    return (std::abs(g_offset_x) > 5.0f &&
+            std::abs(g_offset_y) > 5.0f &&
+            std::abs(g_offset_z) > 5.0f);
 }
 inline bool shouldFollowStart() {
     return g_should_follow_start.load();

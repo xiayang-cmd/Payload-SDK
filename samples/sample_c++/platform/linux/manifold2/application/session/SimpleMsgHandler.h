@@ -41,4 +41,5 @@ private:
 
 private:
     std::function<void(const uint8_t*, std::size_t)> m_sendCallback;
+    uint m_uavId = 0; // 默认无人机ID为0
 };

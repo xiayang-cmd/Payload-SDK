@@ -25,8 +25,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include <liveview/test_liveview_entry.hpp>
 #include <perception/test_perception_entry.hpp>
-#include <perception/test_lidar_entry.hpp>
-#include <perception/test_radar_entry.hpp>
 // #include <flight_control/test_flight_control.h>,有个类型名称和这个库里面的重了
 #include <gimbal/test_gimbal_entry.hpp>
 #include "application.hpp"
@@ -44,9 +42,7 @@
 #include <positioning/test_positioning.h>
 #include <hms_manager/hms_manager_entry.h>
 #include "camera_manager/test_camera_manager_entry.h"
-#include <widget_manager/test_widget_manager.hpp>
 #include "simple_fc_subscription.h"
-#include "read_uavId.h"
 #include "UDPServer.h"
 #include "common_data.h"
 #include "SimpleMsgHandler.h"
@@ -56,6 +52,7 @@
 #include <future>
 #include <thread>
 #include <chrono>
+#include "uav_net_config.h"
 
 /* Private constants ---------------------------------------------------------*/
 
@@ -76,23 +73,29 @@ int main(int argc, char **argv)
     T_DjiTestApplyHighPowerHandler applyHighPowerHandler;
 
     // 1. 读取无人机ID
-    g_drone_id = loadUavId("uavinfo.json");
-    const std::string kDestIp   = "255.255.255.255";    // 广播地址
-    const uint16_t    kDestPort = 50732;                // 地面站固定端口
-    const uint16_t    kBRcvPort = 50733;                // 无人机固定端口
+    UavNetConfig::instance().loadFromFile("uav_net_config.json");
+    auto lb = UavNetConfig::instance().localBind();
+    auto gs = UavNetConfig::instance().groundStation();
+    auto bc = UavNetConfig::instance().broadcast();
+    uint32_t m_uavId = UavNetConfig::instance().uavId();
+    // 打印
+    USER_LOG_INFO("UAV ID: %u", m_uavId);
+    USER_LOG_INFO("Local bind: %s:%u", lb.ip.c_str(), lb.port);
+    USER_LOG_INFO("Ground station: %s:%u", gs.ip.c_str(), gs.port);
+    USER_LOG_INFO("Broadcast: %s:%u", bc.ip.c_str(), bc.port);
 
     // 2. 启动UDP服务
     UDPServer udpServer;
-
-    auto serverThread = std::thread([&udpServer]() {
-        udpServer.start("0.0.0.0", kBRcvPort);
+    auto serverThread = std::thread([&udpServer, ip = lb.ip, port = lb.port]() {
+        udpServer.start(ip, port);
     });
     serverThread.detach();
 
-    // 3. 设置消息处理实例的发送函数e注册
+    // 3. 为消息处理实例注册发送函数
     SimpleMsgHandler::instance().setSendCallback(
-        [&udpServer,kDestIp](const uint8_t* buf, std::size_t len){
-            udpServer.sendMessage(kDestIp, kDestPort, buf, len);
+        // 向地面站发送
+        [&udpServer, ip = gs.ip, port = gs.port](const uint8_t* buf, std::size_t len){
+            udpServer.sendMessage(ip, port, buf, len);
         });
 
     // 4. 订阅飞控数据（获取无人机位置、速度等信息）
@@ -102,20 +105,30 @@ int main(int argc, char **argv)
     }
 
     // 5. 广播自身位置
+    static int count_print = 0;
     std::thread telem([&]{
-        sub.run([&udpServer, kDestIp](const UAVDataInfo& t){
-            printf("Lat %.7f, Lon %.7f, Alt %.1f m\n", t.latitude_deg, t.longitude_deg, t.altitude_fused);
+        sub.run([&udpServer, uav_port = lb.port, groud_ip = gs.ip, groud_port = gs.port, board_ip = bc.ip, m_uavId](const UAVDataInfo& t){
+            if(count_print%50==0){
+                USER_LOG_INFO("UAV Pos: Lat %.7f, Lon %.7f, Height %.1f m", t.latitude_deg, t.longitude_deg, t.height_fusion);
+            }
+            count_print++;
 
             // 组数据帧
             const uint8_t* telemetry = reinterpret_cast<const uint8_t*>(&t);
-            auto frame = SimpleProtocol::Uplink::makePositionReportFrame(g_drone_id, telemetry);
+            auto frame = SimpleProtocol::Uplink::makePositionReportFrame(m_uavId, telemetry);
 
-            // 如果是主机，还需要广播给其他无人机
-            udpServer.sendMessage(kDestIp, kDestPort, frame.data(), frame.size());
-            SimpleProtocol::Uplink::changePositionReportFrameForBoard(frame);
+            // 广播给地面站
+            udpServer.sendMessage(groud_ip, groud_port, frame.data(), frame.size());
+            
+            // 如果是主机，则也发给从机
             auto role  = queryCurrentRole();
             if (role == DroneRole::Master) {
-                udpServer.sendMessage(kDestIp, kBRcvPort, frame.data(), frame.size());
+                if(count_print%50==0){
+                    USER_LOG_INFO("Broadcast to slaves");
+                }
+                // 广播地址board_ip
+                SimpleProtocol::Uplink::changePositionReportFrameForBoard(frame);
+                udpServer.sendMessage(board_ip, uav_port, frame.data(), frame.size());
             }
             
         });
@@ -128,6 +141,9 @@ int main(int argc, char **argv)
         USER_LOG_ERROR("ManualFlight init failed");
         return -1;
     }
+
+    osalHandler->TaskSleepMs(5000); // 等待飞控订阅稳定
+    manualFlight.handleTakeOff(10); // 起飞到 10 m 高度
 
     // =========== 3. 主循环状态机 =============
     static std::future<void>   g_follow_task;             // 跟随线程 future
@@ -150,8 +166,15 @@ int main(int argc, char **argv)
 
         //------------------------------------
         case DroneState::Idle:  // 仅主机可达
+        {
+            static bool printed = false;
+            if (!printed) {
+            USER_LOG_INFO("Idle");
+            printed = true;
+            }
             // 仅休息
             break;
+        }
 
         //------------------------------------
         case DroneState::WaitFormationStart:   // 从机等待开始编队
@@ -174,16 +197,31 @@ int main(int argc, char **argv)
                 g_follow_running = true;          // 先置位，防止多次创建
                 g_follow_task = std::async(std::launch::async, [&manualFlight]{
                     /* 后台跟随循环 */
+                    int loop_count = 0;
+                    USER_LOG_WARN("Follow thread started");
                     while (!shouldFollowStop())
                     {
+                        if(g_offset_z<5)
+                        {
+                            g_offset_z = 5; // 最低相差高度 5 m
+                        } 
+
                         // 位置更新
                         manualFlight.FollowHost(
                             g_host_latitude_deg,
                             g_host_longitude_deg,
-                            g_host_altitude_fused,
+                            g_host_height_fusion,
                             g_offset_x, g_offset_y, g_offset_z);                   
                         std::this_thread::sleep_for(
                             std::chrono::milliseconds(100));        // 100 Hz 控制频率
+                        if(loop_count%50==0){
+                            USER_LOG_INFO("Following: Host(%.7f, %.7f, %.1f m), Offset(%.1f, %.1f, %.1f m)",
+                                g_host_latitude_deg,
+                                g_host_longitude_deg,
+                                g_host_height_fusion,
+                                g_offset_x, g_offset_y, g_offset_z);
+                        }
+                        loop_count++;
                     }
                 });
             }

@@ -39,40 +39,54 @@ T_DjiReturnCode SimpleFcSubscription::startService()
         return rc;
     }
 
-    // 休息2s
     auto* osal = DjiPlatform_GetOsalHandler();
-    osal->TaskSleepMs(2000);
 
     // ---------- bind the five topics we need ----------
-    std::cout << "订阅位置信息..." << std::endl;
+    USER_LOG_INFO("订阅位置信息...");
     rc = DjiFcSubscription_SubscribeTopic(
              DJI_FC_SUBSCRIPTION_TOPIC_POSITION_FUSED, DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ, NULL);
     checkSubscription(rc);
-    osal->TaskSleepMs(1000);
 
-    std::cout << "订阅高度信息..." << std::endl;
+    USER_LOG_INFO("订阅GPS位置信息...");
+    rc = DjiFcSubscription_SubscribeTopic(
+             DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,   DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    checkSubscription(rc);
+
+    USER_LOG_INFO("订阅高度信息...");
     rc = DjiFcSubscription_SubscribeTopic(
              DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED,  DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ, NULL);
     checkSubscription(rc);
-    osal->TaskSleepMs(1000);
 
-    std::cout << "订阅融合高度信息..." << std::endl;
+    USER_LOG_INFO("订阅融合高度信息...");
     rc = DjiFcSubscription_SubscribeTopic(
              DJI_FC_SUBSCRIPTION_TOPIC_HEIGHT_FUSION,   DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ, NULL);
     checkSubscription(rc);
-    osal->TaskSleepMs(1000);
 
-    // std::cout << "订阅四元数信息..." << std::endl;
-    // rc = DjiFcSubscription_SubscribeTopic(
-    //          DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,      DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-    // checkSubscription(rc);
-    // osal->TaskSleepMs(1000);
-
-    std::cout << "订阅速度信息..." << std::endl;
+    USER_LOG_INFO("订阅四元数信息...");
     rc = DjiFcSubscription_SubscribeTopic(
-             DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY,        DJI_DATA_SUBSCRIPTION_TOPIC_5_HZ, NULL);
+             DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,      DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
     checkSubscription(rc);
-    osal->TaskSleepMs(1000);
+
+    USER_LOG_INFO("订阅速度信息...");
+    rc = DjiFcSubscription_SubscribeTopic(
+             DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY,        DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    checkSubscription(rc);
+
+    USER_LOG_INFO("相对于起飞点高度...");
+    rc = DjiFcSubscription_SubscribeTopic(
+             DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_OF_HOMEPOINT, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    checkSubscription(rc);
+
+    USER_LOG_INFO("海拔高度...");
+    rc = DjiFcSubscription_SubscribeTopic(
+                DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED, DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ, NULL);
+    checkSubscription(rc);
+    USER_LOG_INFO("无人机状态...");
+    rc = DjiFcSubscription_SubscribeTopic(
+                DJI_FC_SUBSCRIPTION_TOPIC_STATUS_FLIGHT, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    checkSubscription(rc);
+
+    USER_LOG_INFO("PSDK FcSubscription init and subscribe topics done.");
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
@@ -87,11 +101,12 @@ void SimpleFcSubscription::run(TelemetryCallback cb, float user_loop_hz)
 
     // PSDK containers
     T_DjiDataTimestamp ts{};
-    T_DjiFcSubscriptionPositionFused   posFused{};
-    T_DjiFcSubscriptionAltitudeFused   altFused{};
-    T_DjiFcSubscriptionHeightFusion    hFusion{};
+    T_DjiFcSubscriptionPositionFused   posFused{}; 
+    T_DjiFcSubscriptionAltitudeFused   altFused{}; // 海拔高度
+    T_DjiFcSubscriptionHeightFusion    hFusion{}; // 超声波离地高度，超过10m会失效
     T_DjiFcSubscriptionQuaternion      quat{};
     T_DjiFcSubscriptionVelocity        vel{};
+    T_DjiFcSubscriptionAltitudeOfHomePoint altitudeOfHomePoint{}; // Home点高度
 
     while (true)
     {
@@ -99,6 +114,11 @@ void SimpleFcSubscription::run(TelemetryCallback cb, float user_loop_hz)
         DjiFcSubscription_GetLatestValueOfTopic(
             DJI_FC_SUBSCRIPTION_TOPIC_POSITION_FUSED,
             reinterpret_cast<uint8_t*>(&posFused), sizeof(posFused), &ts);
+
+        // 获取Home点高度
+        DjiFcSubscription_GetLatestValueOfTopic(
+            DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_OF_HOMEPOINT,
+            reinterpret_cast<uint8_t*>(&altitudeOfHomePoint), sizeof(altitudeOfHomePoint), &ts);
 
         DjiFcSubscription_GetLatestValueOfTopic(
             DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED,
@@ -120,7 +140,7 @@ void SimpleFcSubscription::run(TelemetryCallback cb, float user_loop_hz)
         data_.latitude_deg   = posFused.latitude  * DEG_PER_RAD;
         data_.longitude_deg  = posFused.longitude * DEG_PER_RAD;
         data_.altitude_fused = altFused;
-        data_.height_fusion  = hFusion;
+        data_.height_fusion  = altFused - altitudeOfHomePoint; // 计算相对于Home点的高度
 
         quaternionToEuler(quat, data_.pitch_deg, data_.roll_deg, data_.yaw_deg);
 
