@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.5)
 project(dji_sdk_demo_linux_cxx CXX)
 
 set(CMAKE_C_FLAGS "-pthread -std=gnu99")
-set(CMAKE_CXX_FLAGS "-std=c++11 -pthread")
+set(CMAKE_CXX_FLAGS "-std=c++17 -pthread")
 set(CMAKE_EXE_LINKER_FLAGS "-pthread")
 set(CMAKE_C_COMPILER "gcc")
 set(CMAKE_CXX_COMPILER "g++")
@@ -25,6 +25,11 @@ include_directories(../../../module_sample)
 include_directories(../../../../sample_c/module_sample)
 include_directories(../common)
 include_directories(../manifold2/application)
+# add
+include_directories(../manifold2/application/common)
+include_directories(../manifold2/application/module)
+include_directories(../manifold2/application/session)
+include_directories(../manifold2/application/nlohmann)
 
 file(GLOB_RECURSE MODULE_SAMPLE_SRC
         ../../../module_sample/liveview/*.c*
@@ -138,3 +143,10 @@ if (OpenCV_FOUND)
     target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
 endif ()
 
+# 复制 uavinfo.json 到可执行文件所在目录（跨平台/多配置均适用）
+add_custom_command(
+  TARGET ${PROJECT_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/application/uav_net_config.json
+          $<TARGET_FILE_DIR:${PROJECT_NAME}>/uav_net_config.json
+)
